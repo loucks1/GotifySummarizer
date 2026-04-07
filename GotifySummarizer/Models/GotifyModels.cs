@@ -42,7 +42,7 @@ public class IgnorableMessage
 
 public class AppRule
 {
-    public int? AppId { get; set; }                    // Changed to match real API
+    public int? AppId { get; set; }
 
     public IgnorableMessage[] IgnorableMessages { get; set; } = Array.Empty<IgnorableMessage>();
 }

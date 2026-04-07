@@ -65,62 +65,68 @@ namespace GotifySummarizer
         // ====================== CORE PROCESSING ======================
         private async Task ProcessMessagesAsync(CancellationToken ct)
         {
-            var byDay = new Dictionary<DateTime, DataStructure>();
+            try
+            {
+                var byDay = new Dictionary<DateTime, DataStructure>();
 
-            var allMessagesTask = GetAllMessagesAsync(ct);
-            var appNamesTask = GetAppNamesAndIdsAsync();
+                var allMessagesTask = GetAllMessagesAsync(ct);
+                var appNamesTask = GetAppNamesAndIdsAsync();
 
-            List<GotifyMessage>? messagesInWindow = null;
+                List<GotifyMessage>? messagesInWindow = null;
 
-            var allMessages = await allMessagesTask;
+                var allMessages = await allMessagesTask;
 
-            if (DateTime.Now.Hour < 6)
-                messagesInWindow = [.. allMessages
+                if (DateTime.Now.Hour < 6)
+                    messagesInWindow = [.. allMessages
                 .Where(m => DateTime.TryParse(m.Date, out var msgTime) &&
                             msgTime < DateTime.Now.Date)];
 
-            foreach (var msg in messagesInWindow ?? allMessages)
-            {
-                var rule = FindRuleForMessage(msg);
-                if (rule == null) continue;
-
-                DateTime.TryParse(msg.Date, out var msgTime);
-
-                var targetDate = msgTime.Date;
-                if (!byDay.ContainsKey(targetDate))
-                    byDay[targetDate] = new DataStructure();
-
-                var dataStructure = byDay[targetDate];
-
-                bool isIgnorable = false;
-
-                foreach (var ignorableMessage in rule.IgnorableMessages)
+                foreach (var msg in messagesInWindow ?? allMessages)
                 {
-                    var canIgnore = msg.Title.Contains(ignorableMessage.Subject);
-                    if (canIgnore && !String.IsNullOrEmpty(ignorableMessage.detailRegex))
+                    var rule = FindRuleForMessage(msg);
+                    if (rule == null) continue;
+
+                    DateTime.TryParse(msg.Date, out var msgTime);
+
+                    var targetDate = msgTime.Date;
+                    if (!byDay.ContainsKey(targetDate))
+                        byDay[targetDate] = new DataStructure();
+
+                    var dataStructure = byDay[targetDate];
+
+                    bool isIgnorable = false;
+
+                    foreach (var ignorableMessage in rule.IgnorableMessages)
                     {
-                        msg.Digest += ExtractDetailsSection(msg.Message, ignorableMessage.detailRegex);
+                        var canIgnore = msg.Title.Contains(ignorableMessage.Subject);
+                        if (canIgnore && !String.IsNullOrEmpty(ignorableMessage.detailRegex))
+                        {
+                            msg.Digest += ExtractDetailsSection(msg.Message, ignorableMessage.detailRegex);
+                        }
+                        isIgnorable |= canIgnore;
                     }
-                    isIgnorable |= canIgnore;
+                    if (isIgnorable)
+                    {
+                        dataStructure.deletableMessages.Add(msg);
+                    }
+                    else
+                    {
+                        dataStructure.ignoreCount++;
+                    }
                 }
-                if (isIgnorable)
+
+                foreach (var group in byDay.OrderByDescending(g => g.Key))
                 {
-                    dataStructure.deletableMessages.Add(msg);
-                }
-                else
-                {
-                    dataStructure.ignoreCount++;
+                    _logger.LogInformation("Day {date} summary: Deletable Messages={s} | Ignored Messages={f}",
+                         group.Key.ToString("yyyy-MM-dd"), group.Value.deletableMessages.Count, group.Value.ignoreCount);
+
+                    await SendDailySummaryAsync(group.Key, group.Value, await appNamesTask, ct);
                 }
             }
-
-            foreach (var group in byDay.OrderByDescending(g => g.Key))
+            catch (Exception ex)
             {
-                _logger.LogInformation("Day {date} summary: Deletable Messages={s} | Ignored Messages={f}",
-                     group.Key.ToString("yyyy-MM-dd"), group.Value.deletableMessages.Count, group.Value.ignoreCount);
-
-                await SendDailySummaryAsync(group.Key, group.Value, await appNamesTask, ct);
+                _logger.LogError(ex, "An error occurred during message processing.");
             }
-
         }
 
         private async Task<List<GotifyMessage>> GetAllMessagesAsync(CancellationToken ct)
