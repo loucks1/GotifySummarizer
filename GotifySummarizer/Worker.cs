@@ -15,6 +15,7 @@ namespace GotifySummarizer
         private readonly GotifyOptions _options;
         private readonly HttpClient _httpClient;
         private readonly List<AppRule> _rules;
+        private readonly TimeZoneInfo centralTZI = TimeZoneInfo.FindSystemTimeZoneById("America/Chicago");
 
         public Worker(ILogger<Worker> logger, IOptions<GotifyOptions> options)
         {
@@ -51,9 +52,14 @@ namespace GotifySummarizer
         // ====================== DAILY SCHEDULED RUN ======================
         private DateTime GetNextRunTimeAtSixOneAM()
         {
-            var now = DateTime.UtcNow;
-            var todaySixOne = new DateTime(now.Year, now.Month, now.Day, 6, 1, 0, DateTimeKind.Utc);
-            return now < todaySixOne ? todaySixOne : todaySixOne.AddDays(1);
+            var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, centralTZI).DateTime;
+
+            var nextRunLocal = nowLocal.Date.AddHours(6).AddMinutes(1);  // Today at 6:01 AM
+
+            if (nowLocal > nextRunLocal)
+                nextRunLocal = nextRunLocal.AddDays(1);   // Tomorrow at 6:01 AM
+
+            return TimeZoneInfo.ConvertTimeToUtc(nextRunLocal, centralTZI);
         }
 
         private class DataStructure
@@ -76,10 +82,9 @@ namespace GotifySummarizer
 
                 var allMessages = await allMessagesTask;
 
-                if (DateTime.Now.Hour < 6)
-                    messagesInWindow = [.. allMessages
-                .Where(m => DateTime.TryParse(m.Date, out var msgTime) &&
-                            msgTime < DateTime.Now.Date)];
+                var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, centralTZI).DateTime;
+                if (nowLocal.Hour < 6)
+                    messagesInWindow = [.. allMessages.Where(m => DateTime.TryParse(m.Date, out var msgTime) && msgTime < nowLocal.Date)];
 
                 foreach (var msg in messagesInWindow ?? allMessages)
                 {
@@ -87,6 +92,7 @@ namespace GotifySummarizer
                     if (rule == null) continue;
 
                     DateTime.TryParse(msg.Date, out var msgTime);
+                    msgTime = TimeZoneInfo.ConvertTime(msgTime.ToUniversalTime(), centralTZI);
 
                     var targetDate = msgTime.Date;
                     if (!byDay.ContainsKey(targetDate))
